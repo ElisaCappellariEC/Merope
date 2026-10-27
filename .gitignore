@@ -1,0 +1,5 @@
+BUILD-DIR/
+INSTALL-DIR/
+modules/
+*.msh
+*.log

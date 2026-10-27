@@ -30,8 +30,9 @@ else
     echo "Please verify the location of MKL"
     echo "------------------------------"
     echo "------------------------------"
-    export MKL_ROOT_LIB="/usr/lib/x86_64-linux-gnu"
-    export MKL_INCLUDE_DIRS="/usr/include/mkl" 
+    CONDA_PREFIX=/home/ecappellari/miniconda3
+    export MKL_ROOT_LIB="$CONDA_PREFIX/lib"
+    export MKL_INCLUDE_DIRS="$CONDA_PREFIX/include"
 fi
 
 
