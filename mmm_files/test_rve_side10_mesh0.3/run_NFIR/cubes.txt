@@ -1,0 +1,16 @@
+# cubes of run_NFIR for the tests of the RVE (python3 utilities/HBFF/Merope/test_rve.py): MMM solves every folder with the pressure 1 in all the pores, analyse_rve.py reads the results
+#   test    side_um  seed  mesh_um  folder
+    size  10.000000     1      0.3  side10_seed01
+    size  10.000000     2      0.3  side10_seed02
+    size  10.000000     3      0.3  side10_seed03
+    size  10.000000     4      0.3  side10_seed04
+    size  10.000000     5      0.3  side10_seed05
+    size  10.000000     6      0.3  side10_seed06
+    size  10.000000     7      0.3  side10_seed07
+    size  10.000000     8      0.3  side10_seed08
+    size  10.000000     9      0.3  side10_seed09
+    size  10.000000    10      0.3  side10_seed10
+    mesh  10.000000     1      0.6  mesh0.6
+    mesh  10.000000     1      0.4  side10_seed01_mesh0.4
+    mesh  10.000000     1      0.5  side10_seed01_mesh0.5
+    mesh  10.000000     1      0.3  side10_seed01_meshdouble_refinement

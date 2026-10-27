@@ -1,0 +1,10 @@
+# classes of run_NFIR.txt for the size test of the RVE (test_rve.py)
+# pressure 1 in every class, no confinement
+#  radius_um      porosity  pressure_MPa  confinement_MPa
+    1.701689  8.894365e-03        1.0000           0.0000
+    1.191933  2.983604e-02        1.0000           0.0000
+    0.852447  4.344484e-02        1.0000           0.0000
+    0.610359  2.524462e-02        1.0000           0.0000
+    0.436419  5.829722e-03        1.0000           0.0000
+    0.310992  5.299454e-04        1.0000           0.0000
+    0.219081  1.897976e-05        1.0000           0.0000
