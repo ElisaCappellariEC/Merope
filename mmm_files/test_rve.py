@@ -19,15 +19,18 @@ import merope_pore_pressure
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = "test_rve_side10_mesh0.3"  # folder of the cubes, in the current directory
 
 # Choices
 RUN = "NFIR"                      # run of ../mmm_inputs: the reference, the NFIR disc before the anneal (pore_distribution.py)
+SIDE = 30.0                       # um: side of the cubes
+MESH_SIZE = 0.15                  # um: mesh size of the cubes, next to the pores with REFINE of merope_pore_pressure.py
 SEEDS = 10                        # cubes of the size test, as the ten seeds of OperaHPC D5.2
 EPS_R = 0.05                      # relative precision asked on the mean of s_hat of a class
-MESH_SIZES = (0.30, 0.60)         # um: meshes of the pore of the mesh test, that of the runs among them; the finest is the reference
+MESH_SIZES = (MESH_SIZE, 2 * MESH_SIZE)  # um: meshes of the mesh test, that of the size test (the finest, the reference) and the double
 EPS_MESH = EPS_R                  # tolerance on s_hat between the mesh of the runs and the finest mesh
 PRESSURE = 1.0                    # unit pressure of every pore (s_hat = sigma_I / p), no distribution
+
+OUT = f"test_rve_side{SIDE:g}_mesh{MESH_SIZE:g}"  # folder of the cubes, in the current directory
 
 
 def write_run(path, radius, pore_fraction, title):
@@ -74,9 +77,9 @@ def write_cubes(mpp, run):
     rows = listed_cubes(out)
     done = {row["test"] for row in rows}
 
-    # size of the cube: the classes of the run at unit pressure, in the cube of the runs
-    side = 10 # mpp.dimensions_side
-    mesh_size = 0.30 #mpp.mesh_size
+    # size of the cube: the classes of the run at unit pressure, in the cube of SIDE
+    side = SIDE
+    mesh_size, mesh_double = MESH_SIZES
     unit = os.path.join(out, f"unit_{run}.txt")
     write_run(unit, radius, pore_fraction, f"classes of {os.path.basename(path)} for the size test of the RVE (test_rve.py)")
     expected = mpp.pores_in_cube(radius, pore_fraction, side)[1]
@@ -89,17 +92,19 @@ def write_cubes(mpp, run):
     else:
         for seed in range(1, SEEDS + 1):
             folder = f"side{side:g}_seed{seed:02d}"
-            mpp.generate(unit, seed=seed, folder=new_folder(out, folder))
+            mpp.generate(unit, side=side, seed=seed, mesh=mesh_size, folder=new_folder(out, folder))
             rows.append({"test": "size", "side": side, "seed": seed, "mesh": mesh_size, "folder": folder})
-        
-        # mesh test
+
+        # mesh test: the cube of seed 1 with the double mesh size
         seed = 1
         meshfolder = f"side{side:g}_seed{seed:02d}_meshdouble"
-        mpp.generate(unit, seed=seed, mesh=(mesh_size*2), folder=new_folder(out, meshfolder))
-        rows.append({"test": "mesh", "side": side, "seed": 1, "mesh": mesh_size*2, "folder": f"mesh{mesh_size*2:g}"})
+        mpp.generate(unit, side=side, seed=seed, mesh=mesh_double, folder=new_folder(out, meshfolder))
+        rows.append({"test": "mesh", "side": side, "seed": seed, "mesh": mesh_double, "folder": meshfolder})
 
+    refined = (f"; mesh_um is the size next to the pores, {mpp.FAR_TO_FINE:g} times larger from "
+               f"{mpp.D_FINE + mpp.D_TRANS:g} um from them (refine() of merope_pore_pressure.py)" if mpp.REFINE else "")
     lines = [(f"# cubes of run_{run} for the tests of the RVE (python3 utilities/HBFF/Merope/test_rve.py): MMM solves every folder "
-              f"with the pressure {PRESSURE:g} in all the pores, analyse_rve.py reads the results"),
+              f"with the pressure {PRESSURE:g} in all the pores, analyse_rve.py reads the results{refined}"),
              f"# {'test':>6s}{'side_um':>11s}{'seed':>6s}{'mesh_um':>9s}  folder"]
     lines += [f"{row['test']:>8s}{row['side']:11.6f}{row['seed']:6d}{row['mesh']:9g}  {row['folder']}" for row in rows]
     with open(os.path.join(out, "cubes.txt"), "w") as f:

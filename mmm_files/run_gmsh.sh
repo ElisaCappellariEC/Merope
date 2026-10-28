@@ -2,7 +2,9 @@
 # author: E.Cappellari, POLIMI-CEA 2026
 
 # =============================================================================
-# 3D mesh of every mesh_*.geo written by Mérope in the selected folder: 
+# 3D mesh of every mesh_*.geo written by Mérope in the selected folder: with
+# REFINE of merope_pore_pressure.py the .geo has the mesh refined next to the
+# pores (refine()), otherwise the uniform size of Mérope.
 #
 # Outputs:
 #   mesh_<name>.msh
@@ -17,7 +19,7 @@ set -uo pipefail
 
 # =====CONFIGURATION============================================================
 GMSH="/home/ecappellari/.local/bin/gmsh"
-FOLDER="${1:-test_rve_side10_mesh0.3}"  # folder of the .geo files: the first argument, if given
+FOLDER="${1:-test_rve_side30_mesh0.15}"  # folder of the .geo files: the first argument, if given
 MSH_FORMAT="2.2"
 case "$MSH_FORMAT" in
     2.2) GMSH_FORMAT="msh2" ;;
@@ -27,11 +29,19 @@ case "$MSH_FORMAT" in
         exit 1
         ;;
 esac
+# High-order optimisation of the curved order-2 elements that get inverted (jac. < 0) near close bubbles:
+# with them MMM stops with "solve: the non linear solver did not converge" or gives a wrong stress next to them.
+#   2 = elastic + optimisation: needed at uniform 0.3 um (side10_seed01: 3 inverted elements fixed), but on the
+#       refined mesh its global elastic system went over 14 GB of RAM (side10_seed01: killed by the system)
+#   1 = optimisation of the bad patches only, no cost when there is none. Refined meshes, jac. < 0 before it:
+#       side10_seed01 at 0.15 um none; side30_seed01 at 0.3 um 242, all fixed (inverted_elements.py: 0), 440 s, 2 GB
+#   0 = none
+# The .geo refined next to the pores is the one with a "Background Field" (refine() of merope_pore_pressure.py).
+HIGH_ORDER_OPTIMIZE_UNIFORM=2
+HIGH_ORDER_OPTIMIZE_REFINED=1
+
 # Extra Gmsh arguments.
 GMSH_EXTRA_ARGS=(
-    # Fix the curved order-2 elements that get inverted (jac. < 0) near close bubbles:
-    # without it MMM stops with "solve: the non linear solver did not converge".
-    -setnumber Mesh.HighOrderOptimize 2
     # Optional partitioning:
     # -setnumber Mesh.MetisAlgorithm 2
     # -part 50
@@ -53,6 +63,7 @@ fi
 total=0
 success=0
 failed=0
+to_check=0
 
 while IFS= read -r -d '' geo; do
     total=$((total + 1))
@@ -117,6 +128,21 @@ while IFS= read -r -d '' geo; do
         echo "Geometry format: no explicit assignment found" >> "$log"
     fi
 
+    # Mesh refined next to the pores (size fields of refine()) or uniform size of Mérope.
+
+    if grep -q '^Background Field' "$geo"; then
+        high_order_optimize=$HIGH_ORDER_OPTIMIZE_REFINED
+        mesh_kind="$(grep -m 1 -o 'Refinement next to the pores.*' "$geo" | sed 's/ (refine() of merope_pore_pressure.py)//')"
+    else
+        high_order_optimize=$HIGH_ORDER_OPTIMIZE_UNIFORM
+        mesh_kind="uniform size of Mérope"
+    fi
+    echo "    Mesh: $mesh_kind | HighOrderOptimize $high_order_optimize"
+    {
+        echo "Mesh: $mesh_kind"
+        echo "HighOrderOptimize: $high_order_optimize"
+    } >> "$log"
+
     # Run Gmsh and capture ALL output.
 
     start_seconds=$(date +%s)
@@ -133,6 +159,7 @@ while IFS= read -r -d '' geo; do
     "$GMSH" "$geo" \
         -3 \
         -format "$GMSH_FORMAT" \
+        -setnumber Mesh.HighOrderOptimize "$high_order_optimize" \
         "${GMSH_EXTRA_ARGS[@]}" \
         -o "$msh" \
         >> "$log" 2>&1
@@ -142,8 +169,13 @@ while IFS= read -r -d '' geo; do
     end_seconds=$(date +%s)
     elapsed=$((end_seconds - start_seconds))
 
-    # Show only relevant information in the terminal.
+    ok=0
     if [[ $status -eq 0 && -s "$msh" ]]; then
+        ok=1
+    fi
+
+    # Show only relevant information in the terminal.
+    if [[ $ok -eq 1 ]]; then
         echo "    SUCCESS | $(basename "$msh") | ${elapsed}s"
     else
         echo "    FAILED  | $(basename "$geo") | exit code $status"
@@ -160,7 +192,34 @@ while IFS= read -r -d '' geo; do
         echo "End time     : $(date '+%Y-%m-%d %H:%M:%S')"
     } >> "$log"
 
-    if [[ $status -eq 0 && -s "$msh" ]]; then
+    # Inverted elements (jac. < 0) as Gmsh counts them: before the high-order optimisation, the result of the
+    # optimisation (HighOrderOptimize 1) and the count after it (HighOrderOptimize 2). The count of Gmsh is a
+    # conservative bound (an element it lists can be valid): a flagged mesh is checked with inverted_elements.py.
+
+    if [[ $ok -eq 1 ]]; then
+        before=$(grep -E ': Volume mesh: worst distortion' "$log" | tail -n 1 | sed -E 's/^[A-Za-z]+ *: //' || true)
+        result=$(grep -E ': Optimization (succeeded|partially|failed)' "$log" | tail -n 1 | sed -E 's/^[A-Za-z]+ *: //' || true)
+        after=$(grep -E ': Final volume mesh: worst distortion' "$log" | tail -n 1 | sed -E 's/^[A-Za-z]+ *: //' || true)
+        if [[ -n "$before" ]]; then echo "    Before optimisation: $before"; fi
+        if [[ -n "$result" ]]; then echo "    Optimisation       : $result"; fi
+        if [[ -n "$after" ]]; then echo "    After optimisation : $after"; fi
+
+        check=0
+        if [[ -n "$after" ]]; then
+            if [[ "$after" == *"jac. <"* ]]; then check=1; fi
+        elif [[ -n "$result" ]]; then
+            if [[ "$result" == *failed* ]]; then check=1; fi
+        elif [[ "$before" == *"jac. <"* ]]; then
+            check=1
+        fi
+        if [[ $check -eq 1 ]]; then
+            echo "    WARNING | possible inverted elements: python3 inverted_elements.py $(dirname "$msh")"
+            echo "Possible inverted elements (Gmsh): check with inverted_elements.py" >> "$log"
+            to_check=$((to_check + 1))
+        fi
+    fi
+
+    if [[ $ok -eq 1 ]]; then
         echo "Status: SUCCESS" >> "$log"
         success=$((success + 1))
     else
@@ -179,6 +238,7 @@ echo "============================================================"
 echo "Folder          : $FOLDER"
 echo "Requested format: MSH $MSH_FORMAT"
 echo "Total           : $total"
+echo "To check        : $to_check (possible inverted elements for Gmsh: inverted_elements.py)"
 echo "Successful      : $success"
 echo "Failed          : $failed"
 echo "============================================================"

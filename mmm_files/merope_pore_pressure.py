@@ -10,7 +10,7 @@ This script will feed the future MMM micromechanical calculations.
 
 For every run it writes, in the folder <run>_seed_<seed>_dmin<distMin> of the current directory:
     bubbles_<run>.txt   one row per pore: phase, x, y, z, radius, pressure
-    mesh_<run>.geo      geometry for the mesh generator
+    mesh_<run>.geo      geometry for the mesh generator, with the mesh refined next to the pores (REFINE, refine())
     summary_<run>.txt   cube side, confining pressure, and per class the porosity
 
 @author E. Cappellari
@@ -19,7 +19,9 @@ For every run it writes, in the folder <run>_seed_<seed>_dmin<distMin> of the cu
 
 ###### Libraries ######
 import glob
+import itertools
 import os
+import re
 import sac_de_billes as sdb # Sphere generator
 import merope
 import numpy as np
@@ -31,9 +33,16 @@ RUN_FILES = os.path.join(HERE, "..", "../sciantix-official/utilities/HBFF/mmm_in
 # The RVE is dimensionless, nevertheless dimensions of objects within the RVE should stay consistent through each other: lengths are in um, as the radii of the run file. The side of the cube, the repulsion distance and the mesh size are fixed.
 dimensions_side = 10  # um - side of the cube
 distMin = 0.3         # um - repulsion distance from OperaHPC D5.2 - to be verified a posteriori
-mesh_size = 0.30      # um - mesh size, should be fine enough but it can be changed
+mesh_size = 0.30      # um - mesh size next to the pores (REFINE) or in the whole cube, should be fine enough but it can be changed
 SEED = 1  # Single seed value - random positioning of the pores, however at low
           # cube size / defect size the seed could be meaningless.
+
+###### Mesh refined next to the pores only ######
+# mesh_size is kept up to D_FINE from the pore surfaces, then the size grows over D_TRANS up to FAR_TO_FINE * mesh_size (refine()).
+REFINE = True
+FAR_TO_FINE = 3.0     # size far from the pores / mesh_size (0.15 -> 0.45 um)
+D_FINE = 0.3          # um - fine layer around each pore, as distMin: every ligament between close pores is fine
+D_TRANS = 0.6         # um - growth from the fine size to the far one
 
 
 ###### Set of all triples between radius, pore fraction, pressure ######
@@ -63,17 +72,70 @@ def pores_in_cube(radius, pore_fraction, side):
     return r_v, density * side**3
 
 
+def refine(geo, centers, radii, side, h_fine=None, h_far=None, d_fine=D_FINE, d_trans=D_TRANS):
+    """Mesh refined next to the pores only, written in the .geo of Mérope (in place).
+
+    Mérope gives one size to the whole cube (MeshSize {:}). Here every pore, with its periodic images that reach the
+    cube [0, side]^3, gets a Gmsh Ball field: size h_fine (default mesh_size) up to d_fine from the pore surface, then
+    a linear growth over d_trans up to h_far (default FAR_TO_FINE * h_fine). The size is the smallest of the balls.
+    Dropped from the .geo: MeshSize {:} (not used), Mesh 2; Mesh 3; (run_gmsh.sh meshes with -3: with them the volume
+    was meshed twice) and the fields of a previous refine().
+    centers (N x 3) and radii (N) in um. For a cube already written:
+        b = np.loadtxt("bubbles_<run>.txt"); refine("mesh_<run>.geo", b[:, 1:4], b[:, 4], side)
+
+    """
+    h_fine = mesh_size if h_fine is None else h_fine
+    h_far = FAR_TO_FINE * h_fine if h_far is None else h_far
+    lines = []
+    n = 0
+    for c0, r in zip(np.asarray(centers, dtype=float), np.asarray(radii, dtype=float)):
+        for shift in itertools.product((-side, 0.0, side), repeat=3):
+            c = c0 + shift
+            gap = np.linalg.norm(np.maximum(0.0, np.maximum(-c, c - side)))  # from the centre to the cube
+            if gap > r + d_fine + d_trans:
+                continue
+            n += 1
+            lines += [f"Field[{n}] = Ball;",
+                      f"Field[{n}].XCenter = {c[0]:.12g}; Field[{n}].YCenter = {c[1]:.12g}; Field[{n}].ZCenter = {c[2]:.12g};",
+                      f"Field[{n}].Radius = {r + d_fine:.12g}; Field[{n}].Thickness = {d_trans:.12g};",
+                      f"Field[{n}].VIn = {h_fine:.12g}; Field[{n}].VOut = {h_far:.12g};"]
+    lines += [f"Field[{n + 1}] = Min;",
+              f"Field[{n + 1}].FieldsList = {{1:{n}}};",
+              f"Background Field = {n + 1};",
+              "Mesh.MeshSizeFromPoints = 0;",
+              "Mesh.MeshSizeFromCurvature = 0;",
+              "Mesh.MeshSizeExtendFromBoundary = 0;",
+              f"Mesh.MeshSizeMax = {h_far:.12g};"]
+
+    with open(geo) as f:
+        text = f.read()
+    text = re.sub(r"\n*// BEGIN  Refinement next to the pores.*?// END  Refinement next to the pores\n?", "\n", text,
+                  flags=re.DOTALL)
+    text = re.sub(r"^\s*MeshSize\s*\{:\}\s*=.*;\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*Mesh\s+[23]\s*;\s*$", "", text, flags=re.MULTILINE)
+    header = [("// BEGIN  Refinement next to the pores (refine() of merope_pore_pressure.py): "
+               f"{h_fine:g} um up to {d_fine:g} um from the pores, {h_far:g} um after {d_trans:g} um more")]
+    with open(geo, "w") as f:
+        f.write(text.rstrip() + "\n\n" + "\n".join(header + lines) + "\n// END  Refinement next to the pores\n")
+    print(f"Mesh refined next to the pores: {h_fine:g} um up to {d_fine:g} um from the pores, {h_far:g} um after "
+          f"{d_trans:g} um more ({n} balls with the periodic images)")
+    return n
+
+
 def generate(path, side=dimensions_side, seed=SEED, mesh=mesh_size, folder=None):
     """Pores of a run file in a periodic cube of the given side (um), placed with the given seed and meshed at the given
-    size (um), and the files of the cube, written in folder (by default mmm_inputs/<run>_seed_<seed>_dmin<distMin> of the
-    current directory). The defaults are the choices at the top of this file."""
+    size (um; with REFINE the size next to the pores, see refine()), and the files of the cube, written in folder (by
+    default mmm_inputs/<run>_seed_<seed>_dmin<distMin> of the current directory). The defaults are the choices at the top
+    of this file."""
     run = os.path.splitext(os.path.basename(path))[0]
     radius, pore_fraction, pressure, confinement = read_run(path)
     r_v, expected = pores_in_cube(radius, pore_fraction, side)
     L = [side, side, side]  # cube
 
+    refined = (f" next to the pores, {FAR_TO_FINE * mesh:.3f} um after {D_FINE + D_TRANS:g} um from them"
+               if REFINE else "")
     print(f"\n{run}: porosity {pore_fraction.sum():.4f}, R_V = {r_v:.4f} um, cube side {side:g} um with {expected.sum():.0f} pores, "
-          f"distMin {distMin:.3f} um, mesh size {mesh:.3f} um, confining pressure {confinement:g} MPa")
+          f"distMin {distMin:.3f} um, mesh size {mesh:.3f} um{refined}, confining pressure {confinement:g} MPa")
     print(f"{'radius_um':>10s}{'porosity':>12s}{'pressure_MPa':>14s}{'pores expected':>16s}")
     for r, pf, p, n in zip(radius, pore_fraction, pressure, expected):
         print(f"{r:10.4f}{pf:12.4e}{p:14.2f}{n:16.1f}")
@@ -122,7 +184,7 @@ def generate(path, side=dimensions_side, seed=SEED, mesh=mesh_size, folder=None)
     placed = np.bincount(classes, minlength=len(radius))
     obtained = placed * 4.0 / 3.0 * np.pi * radius**3 / side**3
     with open(os.path.join(folder_name, f"summary_{run}.txt"), 'w') as out:
-        out.write(f"# {run}: seed {seed}, cube side {side:.6f} um, distMin {distMin:.6f} um, mesh size {mesh:.6f} um\n")
+        out.write(f"# {run}: seed {seed}, cube side {side:.6f} um, distMin {distMin:.6f} um, mesh size {mesh:.6f} um{refined}\n")
         out.write(f"# confining pressure {confinement:g} MPa\n")
         out.write(f"# pores {len(theSpheres)} (expected {expected.sum():.0f}), porosity {obtained.sum():.6f} (asked {pore_fraction.sum():.6f})\n")
         out.write(f"# {'radius_um':>10s}{'pressure_MPa':>14s}{'porosity_asked':>16s}{'porosity':>14s}{'pores_expected':>16s}{'pores':>8s}\n")
@@ -145,7 +207,11 @@ def generate(path, side=dimensions_side, seed=SEED, mesh=mesh_size, folder=None)
 
     # Set output file names
     # meshGenerator.set_nameOutput([os.path.join(folder_name, "mesh_" + run + ".vtk")])
-    meshGenerator.write(os.path.join(folder_name, "mesh_" + run + ".geo"))
+    geo = os.path.join(folder_name, "mesh_" + run + ".geo")
+    meshGenerator.write(geo)
+    if REFINE:
+        refine(geo, [[s.center[0], s.center[1], s.center[2]] for s in theSpheres], [s.radius for s in theSpheres],
+               side, h_fine=mesh)
 
     print(f"Geometry generation completed: {folder_name}")
 
