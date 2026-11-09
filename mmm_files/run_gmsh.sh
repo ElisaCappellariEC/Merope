@@ -19,7 +19,7 @@ set -uo pipefail
 
 # =====CONFIGURATION============================================================
 GMSH="/home/ecappellari/.local/bin/gmsh"
-FOLDER="${1:-test_rve_side30_mesh0.15}"  # folder of the .geo files: the first argument, if given
+FOLDER="${1:-test_rve_side30_mesh0.15_graded_rfine0.45}"  # folder of the .geo files (OUT of test_rve.py): the first argument, if given
 MSH_FORMAT="2.2"
 case "$MSH_FORMAT" in
     2.2) GMSH_FORMAT="msh2" ;;

@@ -43,6 +43,10 @@ REFINE = True
 FAR_TO_FINE = 3.0     # size far from the pores / mesh_size (0.15 -> 0.45 um)
 D_FINE = 0.3          # um - fine layer around each pore, as distMin: every ligament between close pores is fine
 D_TRANS = 0.6         # um - growth from the fine size to the far one
+R_FINE = 0.45         # um - next to a pore smaller than R_FINE the size is mesh_size * R / R_FINE (pore_size()), so that
+                      # every pore has R / h >= R_FINE / mesh_size (3 at 0.15 um, as the class 0.436 um, whose mean moves by
+                      # 1.3 % from 0.3 to 0.15 um, while the classes 0.219 and 0.311 at R / h < 2 moved by 53 and 43 %).
+                      # It scales with mesh_size: the meshes of a mesh test stay alike (Richardson). 0 = off
 
 
 ###### Set of all triples between radius, pore fraction, pressure ######
@@ -72,12 +76,35 @@ def pores_in_cube(radius, pore_fraction, side):
     return r_v, density * side**3
 
 
-def refine(geo, centers, radii, side, h_fine=None, h_far=None, d_fine=D_FINE, d_trans=D_TRANS):
+def pore_size(radius, h_fine=None, r_fine=None):
+    """Mesh size next to pores of the given radius (um): h_fine (default mesh_size), times radius / r_fine below r_fine
+    (default R_FINE; h_fine for every pore if r_fine <= 0)."""
+    h_fine = mesh_size if h_fine is None else h_fine
+    r_fine = R_FINE if r_fine is None else r_fine
+    radius = np.asarray(radius, dtype=float)
+    return h_fine * np.minimum(1.0, radius / r_fine) if r_fine > 0.0 else np.full_like(radius, h_fine)
+
+
+def mesh_text(mesh, r_min):
+    """Mesh of a cube as the summary writes it after "mesh size <mesh> um": nothing for the uniform size of Mérope; with
+    REFINE the size far from the pores and, if the smallest radius r_min is below R_FINE, the size scaled with the radius
+    (refine()). plot_bubbles.py and mesh_compare.py read "next to the pores, <far> um after" and "x R / <R_FINE> um",
+    test_rve.py compares the whole text to keep one rule in a folder."""
+    if not REFINE:
+        return ""
+    h_min = float(pore_size(r_min, mesh))
+    scaled = (f"; {mesh:g} um x R / {R_FINE:g} um next to the pores below R = {R_FINE:g} um ({h_min:.3f} um at "
+              f"R = {r_min:.3f} um)" if h_min < mesh else "")
+    return f" next to the pores, {FAR_TO_FINE * mesh:.3f} um after {D_FINE + D_TRANS:g} um from them{scaled}"
+
+
+def refine(geo, centers, radii, side, h_fine=None, h_far=None, d_fine=D_FINE, d_trans=D_TRANS, r_fine=None):
     """Mesh refined next to the pores only, written in the .geo of Mérope (in place).
 
     Mérope gives one size to the whole cube (MeshSize {:}). Here every pore, with its periodic images that reach the
-    cube [0, side]^3, gets a Gmsh Ball field: size h_fine (default mesh_size) up to d_fine from the pore surface, then
-    a linear growth over d_trans up to h_far (default FAR_TO_FINE * h_fine). The size is the smallest of the balls.
+    cube [0, side]^3, gets a Gmsh Ball field: size h = pore_size(R, h_fine, r_fine) up to d_fine from the pore surface
+    (h_fine, default mesh_size, or less next to the pores smaller than r_fine), then a linear growth over d_trans up to
+    h_far (default FAR_TO_FINE * h_fine). The size is the smallest of the balls.
     Dropped from the .geo: MeshSize {:} (not used), Mesh 2; Mesh 3; (run_gmsh.sh meshes with -3: with them the volume
     was meshed twice) and the fields of a previous refine().
     centers (N x 3) and radii (N) in um. For a cube already written:
@@ -86,9 +113,12 @@ def refine(geo, centers, radii, side, h_fine=None, h_far=None, d_fine=D_FINE, d_
     """
     h_fine = mesh_size if h_fine is None else h_fine
     h_far = FAR_TO_FINE * h_fine if h_far is None else h_far
+    r_fine = R_FINE if r_fine is None else r_fine
+    radii = np.asarray(radii, dtype=float)
+    sizes = pore_size(radii, h_fine, r_fine)
     lines = []
     n = 0
-    for c0, r in zip(np.asarray(centers, dtype=float), np.asarray(radii, dtype=float)):
+    for c0, r, h in zip(np.asarray(centers, dtype=float), radii, sizes):
         for shift in itertools.product((-side, 0.0, side), repeat=3):
             c = c0 + shift
             gap = np.linalg.norm(np.maximum(0.0, np.maximum(-c, c - side)))  # from the centre to the cube
@@ -98,7 +128,7 @@ def refine(geo, centers, radii, side, h_fine=None, h_far=None, d_fine=D_FINE, d_
             lines += [f"Field[{n}] = Ball;",
                       f"Field[{n}].XCenter = {c[0]:.12g}; Field[{n}].YCenter = {c[1]:.12g}; Field[{n}].ZCenter = {c[2]:.12g};",
                       f"Field[{n}].Radius = {r + d_fine:.12g}; Field[{n}].Thickness = {d_trans:.12g};",
-                      f"Field[{n}].VIn = {h_fine:.12g}; Field[{n}].VOut = {h_far:.12g};"]
+                      f"Field[{n}].VIn = {h:.12g}; Field[{n}].VOut = {h_far:.12g};"]
     lines += [f"Field[{n + 1}] = Min;",
               f"Field[{n + 1}].FieldsList = {{1:{n}}};",
               f"Background Field = {n + 1};",
@@ -113,12 +143,15 @@ def refine(geo, centers, radii, side, h_fine=None, h_far=None, d_fine=D_FINE, d_
                   flags=re.DOTALL)
     text = re.sub(r"^\s*MeshSize\s*\{:\}\s*=.*;\s*$", "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*Mesh\s+[23]\s*;\s*$", "", text, flags=re.MULTILINE)
+    small = sizes < h_fine
+    scaled = (f"; below R = {r_fine:g} um {h_fine:g} um x R / {r_fine:g} um ({sizes.min():.3g} um at R = "
+              f"{radii.min():.3g} um, {np.count_nonzero(small)} pores)" if small.any() else "")
     header = [("// BEGIN  Refinement next to the pores (refine() of merope_pore_pressure.py): "
-               f"{h_fine:g} um up to {d_fine:g} um from the pores, {h_far:g} um after {d_trans:g} um more")]
+               f"{h_fine:g} um up to {d_fine:g} um from the pores, {h_far:g} um after {d_trans:g} um more{scaled}")]
     with open(geo, "w") as f:
         f.write(text.rstrip() + "\n\n" + "\n".join(header + lines) + "\n// END  Refinement next to the pores\n")
     print(f"Mesh refined next to the pores: {h_fine:g} um up to {d_fine:g} um from the pores, {h_far:g} um after "
-          f"{d_trans:g} um more ({n} balls with the periodic images)")
+          f"{d_trans:g} um more{scaled} ({n} balls with the periodic images)")
     return n
 
 
@@ -132,15 +165,16 @@ def generate(path, side=dimensions_side, seed=SEED, mesh=mesh_size, folder=None)
     r_v, expected = pores_in_cube(radius, pore_fraction, side)
     L = [side, side, side]  # cube
 
-    refined = (f" next to the pores, {FAR_TO_FINE * mesh:.3f} um after {D_FINE + D_TRANS:g} um from them"
-               if REFINE else "")
+    refined = mesh_text(mesh, radius.min())
+    h_min = float(pore_size(radius.min(), mesh)) if REFINE else mesh  # size next to the smallest pore
     print(f"\n{run}: porosity {pore_fraction.sum():.4f}, R_V = {r_v:.4f} um, cube side {side:g} um with {expected.sum():.0f} pores, "
           f"distMin {distMin:.3f} um, mesh size {mesh:.3f} um{refined}, confining pressure {confinement:g} MPa")
     print(f"{'radius_um':>10s}{'porosity':>12s}{'pressure_MPa':>14s}{'pores expected':>16s}")
     for r, pf, p, n in zip(radius, pore_fraction, pressure, expected):
         print(f"{r:10.4f}{pf:12.4e}{p:14.2f}{n:16.1f}")
-    if mesh > 0.5 * radius.min():
-        print(f"mesh size above half of the smallest radius ({radius.min():.3f} um): the smallest class is poorly resolved")
+    if h_min > 0.5 * radius.min():
+        print(f"mesh size {h_min:.3f} um next to the smallest pore, above half of its radius ({radius.min():.3f} um): the "
+              "smallest class is poorly resolved")
 
     ###### Folder for the case: run, seed, dmin ######
     parent_folder = "mmm_inputs/"
