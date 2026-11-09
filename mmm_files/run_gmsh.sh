@@ -13,6 +13,11 @@
 # Usage, from the directory where the Python scripts were run
 #   ./run_gmsh.sh              every mesh_*.geo below FOLDER (set below)
 #   ./run_gmsh.sh OTHER_FOLDER every mesh_*.geo below OTHER_FOLDER only (e.g. one new cube)
+#   FORCE=1 ./run_gmsh.sh      also the .geo already meshed
+#
+# A .geo is skipped when its .msh is not empty, newer than the .geo, and its .log says
+# "Status: SUCCESS" with the same MSH format: only the cubes added by test_rve.py get meshed.
+# A failed or interrupted mesh, or a .geo written again, is meshed again.
 # =============================================================================
 
 set -uo pipefail
@@ -20,6 +25,7 @@ set -uo pipefail
 # =====CONFIGURATION============================================================
 GMSH="/home/ecappellari/.local/bin/gmsh"
 FOLDER="${1:-test_rve_side30_mesh0.15_graded_rfine0.45}"  # folder of the .geo files (OUT of test_rve.py): the first argument, if given
+FORCE="${FORCE:-0}"  # 1 = mesh again also the .geo already meshed
 MSH_FORMAT="2.2"
 case "$MSH_FORMAT" in
     2.2) GMSH_FORMAT="msh2" ;;
@@ -63,6 +69,7 @@ fi
 total=0
 success=0
 failed=0
+skipped=0
 to_check=0
 
 while IFS= read -r -d '' geo; do
@@ -71,6 +78,21 @@ while IFS= read -r -d '' geo; do
     out="${geo%.geo}"
     msh="${out}.msh"
     log="${out}.log"
+
+    # Already meshed: the .msh and the .log of the last run are kept (the warning on inverted elements too).
+
+    if [[ "$FORCE" != 1 && -s "$msh" && "$msh" -nt "$geo" && -f "$log" ]] \
+        && grep -qx 'Status: SUCCESS' "$log" \
+        && grep -qx "Requested format: MSH $MSH_FORMAT" "$log"; then
+        echo "============================================================"
+        echo "[$total] Skipped, already meshed: $geo"
+        if grep -q '^Possible inverted elements (Gmsh)' "$log"; then
+            echo "    WARNING | possible inverted elements: python3 inverted_elements.py $(dirname "$msh")"
+            to_check=$((to_check + 1))
+        fi
+        skipped=$((skipped + 1))
+        continue
+    fi
 
     echo "============================================================"
     echo "[$total] Processing: $geo"
@@ -238,6 +260,7 @@ echo "============================================================"
 echo "Folder          : $FOLDER"
 echo "Requested format: MSH $MSH_FORMAT"
 echo "Total           : $total"
+echo "Skipped         : $skipped (already meshed: FORCE=1 to mesh them again)"
 echo "To check        : $to_check (possible inverted elements for Gmsh: inverted_elements.py)"
 echo "Successful      : $success"
 echo "Failed          : $failed"
