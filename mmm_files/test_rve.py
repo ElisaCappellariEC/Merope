@@ -16,7 +16,6 @@ Usage
 @date   October 2026
 """
 
-import glob
 import os
 import sys
 import merope_pore_pressure
@@ -33,33 +32,21 @@ EPS_R = 0.05                      # relative precision asked on the mean of s_ha
 MESH_SIZES = (MESH_SIZE, MESH_SIZE * 2**0.5, 2 * MESH_SIZE)  # um: meshes of the mesh test on the cube of seed 1, that of
                                   # the size test (the finest, the reference), an intermediate one and the double, in the
                                   # constant ratio sqrt(2): three sizes for Richardson in plot_bubbles.py
-EPS_MESH = EPS_R                  # tolerance on s_hat between the mesh of the runs and the finest mesh
-PRESSURE = 1.0                    # unit pressure of every pore (s_hat = sigma_I / p), no distribution
+# Open check of the mesh (10/11/2026, test_rve_side30_mesh0.15_graded_rfine0.45_delta0.15, -dl 0.15): from 0.212 to
+# 0.15 um the class means move by +0.6 to +1.75 % and x_c of the FGR by 0.5 to 1.6 %, always down with refinement, but
+# Richardson gives orders 0.7-1.4 only (class 0.610 not yet asymptotic): 0.15 um overestimates s_hat by ~1.5-5 %, not
+# measured. Not needed for the LHS (a common bias goes into sigma_R). To measure it, add a fourth size at the END,
+#     MESH_SIZES = (MESH_SIZE, MESH_SIZE * 2**0.5, 2 * MESH_SIZE, MESH_SIZE / 2**0.5)
+# (MESH_SIZES[0] stays the mesh of the size test; plot_bubbles.py takes the finest as reference and Richardson on the
+# three finest), then python3 test_rve.py writes side30_seed01_mesh0.106 only. ~2.8 x the vertices of 0.15 (~7 M):
+# gmsh on the big PC, partition-mesh ~40 GB (the split job has 60 GB), MMM -c 2 on Topaze.
+EPS_MESH = EPS_R                 # tolerance on s_hat between the mesh of the runs and the finest mesh
+mpp = merope_pore_pressure
+PRESSURE = mpp.UNIT_PRESSURE      # unit pressure of every pore (s_hat = sigma_I / p), no distribution
 
 # folder of the cubes, in the current directory; its name holds the rule of the mesh of merope_pore_pressure.py, so that
 # cubes meshed with different rules are not mixed (write_cubes() also checks the summaries of the cubes already there)
-mpp = merope_pore_pressure
-MESH_RULE = ("_graded" + (f"_rfine{mpp.R_FINE:g}" if mpp.R_FINE > 0 else "")) if mpp.REFINE else "_uniform"
-OUT = f"test_rve_side{SIDE:g}_mesh{MESH_SIZE:g}{MESH_RULE}"
-
-
-def write_run(path, radius, pore_fraction, title):
-    """A run file in the format of ../mmm_inputs (radius, porosity, pressure, confinement), with PRESSURE in every class."""
-    lines = [f"# {title}", f"# pressure {PRESSURE:g} in every class, no confinement",
-             f"# {'radius_um':>10s}{'porosity':>14s}{'pressure_MPa':>14s}{'confinement_MPa':>17s}"]
-    lines += [f"{r:12.6f}{pf:14.6e}{PRESSURE:14.4f}{0.0:17.4f}" for r, pf in zip(radius, pore_fraction)]
-    with open(path, "w") as f:
-        f.write("\n".join(lines) + "\n")
-
-
-def listed_cubes(out):
-    """Rows of cubes.txt of a run folder: dicts with test, side, seed, mesh, folder; [] if there is no cubes.txt."""
-    path = os.path.join(out, "cubes.txt")
-    if not os.path.exists(path):
-        return []
-    with open(path) as f:
-        rows = [line.split() for line in f if line.strip() and not line.startswith("#")]
-    return [{"test": t, "side": float(L), "seed": int(n), "mesh": float(h), "folder": f} for t, L, n, h, f in rows]
+OUT = f"test_rve_side{SIDE:g}_mesh{MESH_SIZE:g}{mpp.MESH_RULE}"
 
 
 def run_file(mpp, run):
@@ -77,37 +64,22 @@ def mesh_variant(h):
     return "meshdouble" if np.isclose(h, 2 * MESH_SIZE) else f"mesh{h:.3g}"
 
 
-def check_rule(mpp, out, rows, r_min):
-    """Exit if a cube of out was meshed with another rule than the settings of mpp (REFINE, FAR_TO_FINE, D_FINE, D_TRANS,
-    R_FINE): the meshes of the mesh test, and the cubes of the size test, must follow one rule."""
-    for row in rows:
-        summaries = glob.glob(os.path.join(out, row["folder"], "summary_*.txt"))
-        if not summaries:
-            continue
-        with open(summaries[0]) as f:
-            head = f.readline()
-        expected = f"mesh size {row['mesh']:.6f} um{mpp.mesh_text(row['mesh'], r_min)}"
-        if expected not in head:
-            found = head.split("mesh size", 1)[-1].strip()
-            raise SystemExit(f"{row['folder']} of {out} was meshed with another rule:\n  found    mesh size {found}\n"
-                             f"  settings {expected}\nwrite the cubes in another folder (OUT) or delete these ones")
-
-
 def write_cubes(mpp, run):
     """Cubes of the run with mpp, the module merope_pore_pressure, that cubes.txt does not list yet."""
     path = run_file(mpp, run)
     radius, pore_fraction = mpp.read_run(path)[:2]
     out = os.path.abspath(os.path.join(OUT, f"run_{run}"))
     os.makedirs(out, exist_ok=True)
-    rows = listed_cubes(out)
-    check_rule(mpp, out, rows, radius.min())
+    rows = mpp.listed_cubes(out)  # the meshes of the mesh test, and the cubes of the size test, follow one rule
+    mpp.check_rule(out, rows, radius.min())
     written = {row["folder"] for row in rows}
 
     # size of the cube: the classes of the run at unit pressure, in the cube of SIDE; the mesh test: the cube of seed 1
     # with the other sizes of MESH_SIZES
     side = SIDE
     unit = os.path.join(out, f"unit_{run}.txt")
-    write_run(unit, radius, pore_fraction, f"classes of {os.path.basename(path)} for the size test of the RVE (test_rve.py)")
+    mpp.write_unit_run(unit, radius, pore_fraction,
+                       f"classes of {os.path.basename(path)} for the size test of the RVE (test_rve.py)")
     expected = mpp.pores_in_cube(radius, pore_fraction, side)[1]
     print(f"run_{run} ({path}): {expected.sum():.0f} pores expected in the cube of {side:g} um, {expected.min():.2f} in the rarest class")
     if expected.min() < 2.0:
@@ -122,13 +94,8 @@ def write_cubes(mpp, run):
         mpp.generate(unit, side=side, seed=seed, mesh=h, folder=os.path.join(out, folder))
         rows.append({"test": test, "side": side, "seed": seed, "mesh": h, "folder": folder})
 
-    refined = (f"; mesh_um is the size next to the pores, {mpp.FAR_TO_FINE:g} times larger from "
-               f"{mpp.D_FINE + mpp.D_TRANS:g} um from them"
-               + (f", mesh_um x R / {mpp.R_FINE:g} um next to the pores smaller than R = {mpp.R_FINE:g} um"
-                  if mpp.R_FINE > 0 else "")
-               + " (refine() of merope_pore_pressure.py)" if mpp.REFINE else "")
     lines = [(f"# cubes of run_{run} for the tests of the RVE (python3 test_rve.py): MMM solves every folder "
-              f"with the pressure {PRESSURE:g} in all the pores, plot_bubbles.py reads the results{refined}"),
+              f"with the pressure {PRESSURE:g} in all the pores, plot_bubbles.py reads the results{mpp.rule_note()}"),
              f"# {'test':>6s}{'side_um':>11s}{'seed':>6s}{'mesh_um':>9s}  folder"]
     lines += [f"{row['test']:>8s}{row['side']:11.6f}{row['seed']:6d}{row['mesh']:9g}  {row['folder']}" for row in rows]
     with open(os.path.join(out, "cubes.txt"), "w") as f:
