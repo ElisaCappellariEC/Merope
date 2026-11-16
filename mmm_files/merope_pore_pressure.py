@@ -4,13 +4,9 @@ Cubes of the runs for MMM: the pore classes of a run file, each defined by its
    -   porosity fraction
    -   pressure
 with the confining pressure of the cube, thrown by Mérope in a periodic cube. The run files are
-../../sciantix-official/utilities/HBFF/mmm_inputs/run_*.txt, written by `python3 pore_distribution.py` (HBFF):
+../../sciantix-official/utilities/HBFF/mmm_inputs/run_*.txt, written by `python3 pore_distribution.py`:
 run_NFIR.txt is the reference, the NFIR disc before the anneal (log-normal fit of its measured pores); run_R*.txt are the
-Latin hypercube (index.txt) in the three factors of the RVE, at the R_V and the temperature of the reference:
-    xi       porosity, the distance between the pores                   0.02 to 0.18
-    s        width of the radii (sigma of ln R): R_k / R_V and xi_k / xi  0.05 to 0.42
-    eta_bar  mean packing fraction of the gas: with s, p_k / p_bar      0.045 to 0.23
-(MMM_FACTORS of pore_distribution.py).
+Latin hypercube (index.txt) in the three factors of the RVE, at the R_V and the temperature of the reference.
 
 MMM solves every cube twice, on the same mesh:
     unit/   pressure 1 in every pore: s_hat_1, the factor of the geometry, also needed for the confinement P_h and to
@@ -18,7 +14,7 @@ MMM solves every cube twice, on the same mesh:
     pk/     the gas pressure p_k of every class of the run file: s_hat_B, with the load of the neighbours
 main() writes the cubes of unit/ (bubbles, .geo, summary) and a copy of the run file next to them. The pores do not
 depend on the pressure (Mérope places them from radius, porosity, seed and distMin), so set_pressures.py of
-mm-opera-hpc/polydispersebubble/scripts writes pk/ from unit/ without Mérope, also on Topaze.
+mm-opera-hpc/polydispersebubble/scripts writes pk/ from unit/ without Mérope.
 The cubes already listed in cubes.txt of a run are kept: more seeds, or new runs (an extension of the hypercube), add
 their cubes only. test_rve.py writes the cubes of the tests of the RVE (size of the cube, size of the mesh) with generate().
 
@@ -29,17 +25,19 @@ Layout
     OUT/unit/run_<id>/side<L>_seed<NN>/  bubbles_unit_<id>.txt   one row per pore: phase, x, y, z, radius, pressure
                                          mesh_unit_<id>.geo      geometry for gmsh, mesh refined next to the pores (refine())
                                          summary_unit_<id>.txt   cube side, confining pressure, porosity and pores per class
+
 Usage (from this folder, with Env_Merope.sh loaded)
     python3 merope_pore_pressure.py                     every run of the hypercube (index.txt but NFIR), SEEDS cubes each
     python3 merope_pore_pressure.py R05 R13 --seeds 3   these runs only, cubes of the seeds 1 to 3
-Then bash run_gmsh.sh OUT, python3 inverted_elements.py OUT (ROUTINE.md, points b and b bis), and
-python3 set_pressures.py OUT/unit for pk/.
 
-@author E. Cappellari
-@date   October 2026
+Then bash run_gmsh.sh OUT, python3 inverted_elements.py OUT (ROUTINE.md, points b and b bis), and python3 set_pressures.py OUT/unit for pk/.
+
+@ author: E.Cappellari, POLIMI-CEA 2026
+@ date:   October 2026
 """
 
-###### Libraries ######
+# %% ------------------------------------------------------------------------------------------------------------------
+# Libraries and paths
 import argparse
 import filecmp
 import glob
@@ -56,31 +54,34 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RUN_FILES = os.path.join(HERE, "..", "../sciantix-official/utilities/HBFF/mmm_inputs", "run_*.txt")  # run files of pore_distribution.py
 INDEX = os.path.join(os.path.dirname(RUN_FILES), "index.txt")  # the runs of the hypercube, with their factors
 
-###### Matrix ######
-# The RVE is dimensionless, nevertheless dimensions of objects within the RVE should stay consistent through each other: lengths are in um, as the radii of the run file. The side of the cube, the repulsion distance and the mesh size are fixed.
-dimensions_side = 30  # um - side of the cube, 41 R_V of the NFIR disc: the size test of the RVE (test_rve.py)
-distMin = 0.3         # um - repulsion distance, one HBS grain, from OperaHPC D5.2 - to be verified a posteriori
-mesh_size = 0.15      # um - mesh size next to the pores (REFINE) or in the whole cube, as OperaHPC and the size test
+# %% ------------------------------------------------------------------------------------------------------------------
+# Model choices: RVE is dimensionless, nevertheless dimensions of objects within the RVE should stay consistent through 
+# each other: lengths are in um, as the radii of the run file. The side of the cube, the repulsion distance and the 
+# mesh size are fixed.
+dimensions_side = 30  # um - side of the cube
+distMin = 0.3         # um - repulsion distance, one HBS grain, from OperaHPC D5.2  
+mesh_size = 0.15      # um - mesh size next to the pores or in the whole cube, as OperaHPC and the size test
 SEEDS = 1             # cubes per run (seeds 1 to SEEDS), random positioning of the pores; the runs with few large pores
                       # may need more (one cube holds the FGR within 5 % in every run, not the mean of the largest class)
 UNIT_PRESSURE = 1.0   # pressure of every pore of the cubes of unit/ (s_hat = sigma_I / p)
 
-###### Mesh refined next to the pores only ######
-# mesh_size is kept up to D_FINE from the pore surfaces, then the size grows over D_TRANS up to FAR_TO_FINE * mesh_size (refine()).
+# %% ------------------------------------------------------------------------------------------------------------------
+# Model choices: Mesh refinement next to the pores only, mesh_size is kept up to D_FINE from the pore surfaces, then 
+# the size grows over D_TRANS up to FAR_TO_FINE * mesh_size (refine()).
 REFINE = True
 FAR_TO_FINE = 3.0     # size far from the pores / mesh_size (0.15 -> 0.45 um)
 D_FINE = 0.3          # um - fine layer around each pore, as distMin: every ligament between close pores is fine
 D_TRANS = 0.6         # um - growth from the fine size to the far one
 R_FINE = 0.45         # um - next to a pore smaller than R_FINE the size is mesh_size * R / R_FINE (pore_size()), so that
-                      # every pore has R / h >= R_FINE / mesh_size (3 at 0.15 um, as the class 0.436 um, whose mean moves by
-                      # 1.3 % from 0.3 to 0.15 um, while the classes 0.219 and 0.311 at R / h < 2 moved by 53 and 43 %).
-                      # It scales with mesh_size: the meshes of a mesh test stay alike (Richardson). 0 = off
+                      # every pore has R / h >= R_FINE / mesh_size. 0 = off
 
-# The folders of the cubes (OUT here, and in test_rve.py) hold the rule of the mesh in their name, so that cubes meshed
-# with different rules are not mixed (check_rule() also reads the summaries of the cubes already there)
+# %% ------------------------------------------------------------------------------------------------------------------
+# Folder name
 MESH_RULE = ("_graded" + (f"_rfine{R_FINE:g}" if R_FINE > 0 else "")) if REFINE else "_uniform"
 OUT = f"lhs_side{dimensions_side:g}_mesh{mesh_size:g}{MESH_RULE}"  # in the current directory
 
+# %% ------------------------------------------------------------------------------------------------------------------
+# Functions
 
 ###### Set of all triples between radius, pore fraction, pressure ######
 def read_run(path):
@@ -209,8 +210,7 @@ def refine(geo, centers, radii, side, h_fine=None, h_far=None, d_fine=D_FINE, d_
 def generate(path, side=dimensions_side, seed=1, mesh=mesh_size, folder=None):
     """Pores of a run file in a periodic cube of the given side (um), placed with the given seed and meshed at the given
     size (um; with REFINE the size next to the pores, see refine()), and the files of the cube, written in folder (by
-    default mmm_inputs/<run>_seed_<seed>_dmin<distMin> of the current directory). The defaults are the choices at the top
-    of this file."""
+    default mmm_inputs/<run>_seed_<seed>_dmin<distMin> of the current directory)."""
     run = os.path.splitext(os.path.basename(path))[0]
     radius, pore_fraction, pressure, confinement = read_run(path)
     r_v, expected = pores_in_cube(radius, pore_fraction, side)

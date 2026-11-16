@@ -1,18 +1,15 @@
 """
-Inverted elements (negative Jacobian) in the order-2 tetrahedra of gmsh meshes (MSH 2.2), with the pore next to each.
-
-Why: with Mesh.ElementOrder = 2 gmsh curves the tetrahedra on the spheres, and near close pores some get inverted.
-MMM then either stops ("solve: the non linear solver did not converge") or converges with a wrong stress on the pore
-next to the inverted element (side10_seed01 at 0.3 um: sigma_I/p 1.65 instead of 0.59 on three pores of 0.311 um).
-The count of gmsh ("N elements with jac. < 0") comes from a conservative bound: after Mesh.HighOrderOptimize it can
-list elements that are valid. Here det J is computed on 286 points of every element, so 0 means no inverted element.
+Inverted elements (negative Jacobian) in the order-2 tetrahedra of gmsh meshes (MSH 2.2).
+@ author: E.Cappellari, POLIMI-CEA 2026
+@ date:   October 2026
 
 Usage
     python3 inverted_elements.py FOLDER            every mesh_<name>.msh below FOLDER, with bubbles_<name>.txt next to it
     python3 inverted_elements.py MESH [BUBBLES]    one mesh
 Exit 1 if a mesh has an inverted element.
 """
-
+# %% ------------------------------------------------------------------------------------------------------------------
+# Libraries and paths
 import glob
 import os
 import sys
@@ -22,7 +19,8 @@ import numpy as np
 EDGES = [(0, 1), (1, 2), (0, 2), (0, 3), (2, 3), (1, 3)]  # vertices of the nodes 4..9 of a gmsh 10-node tetrahedron
 GRID = 10  # points i/GRID in barycentric coordinates: 286 points per element, vertices, edges and faces included
 
-
+# %% ------------------------------------------------------------------------------------------------------------------
+# Functions
 def read_msh22(path):
     """Nodes (N x 3) and 10-node tetrahedra (E x 10, indices into the nodes) of a MSH 2.2 file."""
     with open(path) as f:
@@ -81,7 +79,8 @@ def check(mesh, bubbles=None):
               f"{gap[k]:+.3f} um from its surface")
     return len(bad)
 
-
+# %% ------------------------------------------------------------------------------------------------------------------
+# Main
 def main(args):
     if not args or args[0] in ("-h", "--help"):
         print(__doc__)
