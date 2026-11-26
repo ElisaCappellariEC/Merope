@@ -1,7 +1,7 @@
 """
 Cubes with pores of one radius and no close neighbour, to check the stress factor of MMM against known values:
 - isolated: two pores 8.7 um apart in a cube of 10 um (porosity 0.2 %, interaction (R / d)^3 / 2 = 2e-4): the hoop stress at the wall is p / 2 (Lamé);
-- regular:  the simple cubic array of porosity XI, equal pores at the same pressure: the "regular arrangement" of the Biot stress of OperaHPC D5.2 (footnote 2: s_hat = 1/2 + xi); with the mean stress of the matrix xi / (1 - xi) p amplified by 3/2 at a spherical wall, 1/2 + 3/2 xi / (1 - xi).
+- regular:  the simple cubic array of porosity XI, equal pores at the same pressure: the "regular arrangement" of the Biot stress of OperaHPC D5.2 (footnote 2: s_hat = 1/2 + xi).
 
 The regular array is written as a cell of 2 x 2 x 2 pores, the same periodic problem as one pore in a cell of side a, whose 8 values also give the noise of the mesh. The mesh follows the rule of the runs (refine() of merope_pore_pressure.py: mesh_size next to the pores, graded after).
 MMM must solve them with the options of the runs (run_mmm.sh: -sf 0 -dl 0.15).
@@ -72,7 +72,7 @@ def main():
         print(f"{folder}: {len(centres)} pores, cube side {side:.4f} um, porosity {xi:.4f}")
 
     # %% 2. s_hat of the cubes solved --------------------------------------------------------------------------------------
-    # s_hat = (sigma + h) / (1 - h), sigma = sigma_I_max / p at zero strain, h = xi - (1 - xi) <sigma_h> / p (plot_bubbles.py)
+    # s_hat = (sigma + p_m) / (1 - p_m), sigma = sigma_I_max / p at zero strain, p_m = -<sigma_h> / p (plot_bubbles.py)
     for case, (side, centres) in CUBES.items():
         folder = os.path.join(RESULTS, case)
         stresses, hydro = (os.path.join(folder, f) for f in ("bubbles_and_stresses_selected.txt", "sig_hydro.txt"))
@@ -82,11 +82,10 @@ def main():
         sigma = np.atleast_1d(np.genfromtxt(stresses, delimiter=",", names=True)["sigma_I_max"]) / mpp.UNIT_PRESSURE
         volume, average = (np.genfromtxt(hydro, delimiter=",", names=True)[k].item() for k in ("Volume", "Average"))
         xi = 1.0 - volume / side**3
-        h = xi - (1.0 - xi) * average / mpp.UNIT_PRESSURE
-        s_hat = (sigma + h) / (1.0 - h)
-        print(f"{case:9s} xi {xi:.4f}  h {h:.4f}  sigma {sigma.mean():.4f} ({sigma.min():.4f}-{sigma.max():.4f})  "
-              f"s_hat {s_hat.mean():.4f} ({s_hat.min():.4f}-{s_hat.max():.4f})  | isolated 0.5, 1/2 + xi {0.5 + xi:.4f}, "
-              f"1/2 + 3/2 xi/(1-xi) {0.5 + 1.5 * xi / (1.0 - xi):.4f}")
+        p_m = -average / mpp.UNIT_PRESSURE
+        s_hat = (sigma + p_m) / (1.0 - p_m)
+        print(f"{case:9s} xi {xi:.4f}  p_m {p_m:.4f}  sigma {sigma.mean():.4f} ({sigma.min():.4f}-{sigma.max():.4f})  "
+              f"s_hat {s_hat.mean():.4f} ({s_hat.min():.4f}-{s_hat.max():.4f})  | isolated 0.5, 1/2 + xi {0.5 + xi:.4f}")
     return 0
 
 

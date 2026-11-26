@@ -10,7 +10,7 @@ Latin hypercube (index.txt) in the three factors of the RVE, at the R_V and the 
 
 MMM solves every cube twice, on the same mesh:
     unit/   pressure 1 in every pore: s_hat_1, the factor of the geometry, also needed for the confinement P_h and to
-            bring the run with the class pressures to zero macroscopic stress
+            bring the run with the class pressures to zero stress (zero mean of the matrix, D5.2)
     pk/     the gas pressure p_k of every class of the run file: s_hat_B, with the load of the neighbours
 main() writes the cubes of unit/ (bubbles, .geo, summary) and a copy of the run file next to them. The pores do not
 depend on the pressure (Mérope places them from radius, porosity, seed and distMin), so set_pressures.py of
