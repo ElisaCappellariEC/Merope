@@ -6,7 +6,8 @@ Cubes of the runs for MMM: the pore classes of a run file, each defined by its
 with the confining pressure of the cube, thrown by Mérope in a periodic cube. The run files are
 ../../sciantix-official/utilities/HBFF/mmm_inputs/run_*.txt, written by `python3 pore_distribution.py`:
 run_NFIR.txt is the reference, the NFIR disc before the anneal (log-normal fit of its measured pores); run_R*.txt are the
-Latin hypercube (index.txt) in the three factors of the RVE, at the R_V and the temperature of the reference.
+Latin hypercube (index.txt, data/mmm_design.txt of pore_distribution.py) in the two factors of the geometry, xi and s,
+at the R_V and the temperature of the reference.
 
 MMM solves every cube twice, on the same mesh:
     unit/   pressure 1 in every pore: s_hat_1, the factor of the geometry, also needed for the confinement P_h and to
